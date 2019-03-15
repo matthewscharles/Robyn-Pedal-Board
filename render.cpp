@@ -1,8 +1,8 @@
 /*
- ____  _____ _        _    
-| __ )| ____| |      / \   
-|  _ \|  _| | |     / _ \  
-| |_) | |___| |___ / ___ \ 
+ ____  _____ _        _
+| __ )| ____| |      / \
+|  _ \|  _| | |     / _ \
+| |_) | |___| |___ / ___ \
 |____/|_____|_____/_/   \_\
 
 The platform for ultra-low latency audio and sensor processing
@@ -44,6 +44,14 @@ extern "C" {
 #include <string>
 #include <sstream>
 
+//janMod
+#include <fcntl.h>   /* File Control Definitions           */
+#include <termios.h> /* POSIX Terminal Control Definitions */
+#include <unistd.h>  /* UNIX Standard Definitions 	   */
+#include <errno.h>   /* ERROR Number Definitions           */
+//typedef enum { false, true } bool;
+
+
 void Bela_userSettings(BelaInitSettings *settings)
 {
 	settings->uniformSampleRate = 1;
@@ -65,6 +73,43 @@ float gInverseSampleRate;
 
 float* gInBuf;
 float* gOutBuf;
+
+//janMod /*
+/*------------------------------- Opening the Serial Port -------------------------------*/
+
+/* Change /dev/ttyUSB0 to the one corresponding to your system */
+
+int fd;
+/* O_RDWR   - Read/Write access to serial port       */
+/* O_NOCTTY - No terminal will control the process   */
+/* Open in blocking mode,read will wait              */
+
+struct termios SerialPortSettings;	/* Create the structure                          */
+
+char read_buffer[1024];   /* Buffer to store the data received              */
+int  bytes_read = 0;    /* Number of bytes read by the read() system call */
+int i = 0;
+char c;
+
+int const numChars = 32;
+char receivedChars[numChars];
+int ndx = 0;
+char endMarker = '\n';
+char rc;
+bool newData = false;
+
+
+AuxiliaryTask serialInputReadTask;		// Auxiliary task to read I2C
+int readCount = 0;			// How long until we read again...
+int readIntervalSamples = 0; // How many samples between reads
+int readInterval = 50;
+
+void serialInputRead(void*);
+
+int send_val = 0;
+//janMod*/
+
+
 #define PARSE_MIDI
 static std::vector<Midi*> midi;
 std::vector<std::string> gMidiPortNames;
@@ -86,7 +131,7 @@ void dumpMidi()
 	      );
 	for(unsigned int n = 0; n < midi.size(); ++n)
 	{
-		printf("[%2d]%20s %3s %3s (%d-%d)\n", 
+		printf("[%2d]%20s %3s %3s (%d-%d)\n",
 			n,
 			gMidiPortNames[n].c_str(),
 			midi[n]->isInputEnabled() ? "x" : "_",
@@ -136,7 +181,7 @@ static unsigned int getPortChannel(int* channel){
 	}
 	if(port >= midi.size()){
 		// if the port number exceeds the number of ports available, send out
-		// of the first port 
+		// of the first port
 		rt_fprintf(stderr, "Port out of range, using port 0 instead\n");
 		port = 0;
 	}
@@ -334,6 +379,59 @@ bool gDigitalEnabled = 0;
 
 bool setup(BelaContext *context, void *userData)
 {
+
+	//  janMod /*
+
+	    fd = open("/dev/ttyACM0", O_RDWR | O_NOCTTY);	/* ttyUSB0 is the FT232 based USB2SERIAL Converter   */
+	    if(fd == -1)						/* Error Checking */
+	        printf("\n  Error! in Opening ttyUSB0  ");
+	    else
+	        printf("\n  ttyUSB0 Opened Successfully ");
+
+
+	    /*---------- Setting the Attributes of the serial port using termios structure --------- */
+
+
+	    tcgetattr(fd, &SerialPortSettings);	/* Get the current attributes of the Serial port */
+
+	    /* Setting the Baud rate */
+	    cfsetispeed(&SerialPortSettings,B9600); /* Set Read  Speed as 9600                       */
+	    cfsetospeed(&SerialPortSettings,B9600); /* Set Write Speed as 9600                       */
+
+	    /* 8N1 Mode */
+	    SerialPortSettings.c_cflag &= ~PARENB;   /* Disables the Parity Enable bit(PARENB),So No Parity   */
+	    SerialPortSettings.c_cflag &= ~CSTOPB;   /* CSTOPB = 2 Stop bits,here it is cleared so 1 Stop bit */
+	    SerialPortSettings.c_cflag &= ~CSIZE;	 /* Clears the mask for setting the data size             */
+	    SerialPortSettings.c_cflag |=  CS8;      /* Set the data bits = 8                                 */
+
+	    SerialPortSettings.c_cflag &= ~CRTSCTS;       /* No Hardware flow Control                         */
+	    SerialPortSettings.c_cflag |= CREAD | CLOCAL; /* Enable receiver,Ignore Modem Control lines       */
+
+
+	    SerialPortSettings.c_iflag &= ~(IXON | IXOFF | IXANY);          /* Disable XON/XOFF flow control both i/p and o/p */
+	    SerialPortSettings.c_iflag &= ~(ICANON | ECHO | ECHOE | ISIG);  /* Non Cannonical mode                            */
+
+	    SerialPortSettings.c_oflag &= ~OPOST;/*No Output Processing*/
+
+	    /* Setting Time outs */
+	    SerialPortSettings.c_cc[VMIN] = 10; /* Read at least 10 characters */
+	    SerialPortSettings.c_cc[VTIME] = 0; /* Wait indefinetly   */
+
+
+	    if((tcsetattr(fd,TCSANOW,&SerialPortSettings)) != 0) /* Set the attributes to the termios structure*/
+	        printf("\n  ERROR ! in Setting attributes");
+	    else
+	        printf("\n  BaudRate = 9600 \n  StopBits = 1 \n  Parity   = none");
+
+	    /*------------------------------- Read data from serial port -----------------------------*/
+
+	    tcflush(fd, TCIFLUSH);   /* Discards old data in the rx buffer            */
+
+	    serialInputReadTask = Bela_createAuxiliaryTask(&serialInputRead, 50, "bela-serial");
+	    readIntervalSamples = context->audioSampleRate / readInterval;
+
+	    //janMod */
+
 	// Check Pd's version
 	int major, minor, bugfix;
 	sys_getversion(&major, &minor, &bugfix);
@@ -366,7 +464,7 @@ bool setup(BelaContext *context, void *userData)
 
 	/*********/
 
-	// add here other devices you need 
+	// add here other devices you need
 	gMidiPortNames.push_back("hw:1,0,0");
 	//gMidiPortNames.push_back("hw:0,0,0");
 	//gMidiPortNames.push_back("hw:1,0,1");
@@ -487,7 +585,7 @@ bool setup(BelaContext *context, void *userData)
 	// open patch:
 	gPatch = libpd_openfile(file, folder);
 	if(gPatch == NULL){
-		printf("Error: file %s/%s is corrupted.\n", folder, file); 
+		printf("Error: file %s/%s is corrupted.\n", folder, file);
 		return false;
 	}
 
@@ -619,7 +717,7 @@ void render(BelaContext *context, void *userData)
 		{
 			memcpy(
 				gInBuf + n * gLibpdBlockSize,
-				context->audioIn + tick * gLibpdBlockSize + n * context->audioFrames, 
+				context->audioIn + tick * gLibpdBlockSize + n * context->audioFrames,
 				sizeof(context->audioIn[0]) * gLibpdBlockSize
 			);
 		}
@@ -629,7 +727,7 @@ void render(BelaContext *context, void *userData)
 		{
 			memcpy(
 				gInBuf + gLibpdBlockSize * gFirstAnalogInChannel + n * gLibpdBlockSize,
-				context->analogIn + tick * gLibpdBlockSize + n * context->analogFrames, 
+				context->analogIn + tick * gLibpdBlockSize + n * context->analogFrames,
 				sizeof(context->analogIn[0]) * gLibpdBlockSize
 			);
 		}
@@ -725,7 +823,7 @@ void render(BelaContext *context, void *userData)
 		for(int n = 0; n < context->audioInChannels; ++n)
 		{
 			memcpy(
-				context->audioOut + tick * gLibpdBlockSize + n * context->audioFrames, 
+				context->audioOut + tick * gLibpdBlockSize + n * context->audioFrames,
 				gOutBuf + n * gLibpdBlockSize,
 				sizeof(context->audioOut[0]) * gLibpdBlockSize
 			);
@@ -735,7 +833,7 @@ void render(BelaContext *context, void *userData)
 		for(int n = 0; n < context->analogOutChannels; ++n)
 		{
 			memcpy(
-				context->analogOut + tick * gLibpdBlockSize + n * context->analogFrames, 
+				context->analogOut + tick * gLibpdBlockSize + n * context->analogFrames,
 				gOutBuf + gLibpdBlockSize * gFirstAnalogOutChannel + n * gLibpdBlockSize,
 				sizeof(context->analogOut[0]) * gLibpdBlockSize
 			);
@@ -751,4 +849,37 @@ void cleanup(BelaContext *context, void *userData)
 	}
 	libpd_closefile(gPatch);
 	delete [] gScopeOut;
+}
+
+void serialInputRead(void*)
+{
+    while (read(fd, &c, 1) > 0 && newData == false) {
+        rc = c;
+        if (rc != endMarker) {
+            receivedChars[ndx] = rc;
+            ndx++;
+            if (ndx >= numChars) {
+                ndx = numChars - 1;
+            }
+        }
+        else {
+            receivedChars[ndx] = '\0'; // terminate the string, was \0
+            newData = true;
+        }
+    }
+
+    if (newData == true) {
+
+//        for (i=0;i<ndx;i++) {
+//            printf("%c",receivedChars[i]);
+//        }
+//        printf("\n");
+         ndx=0;
+        newData = false;
+        // libpd_float("arduino", send_val);
+         libpd_float("arduino", atof(receivedChars));//receivedChars
+        if (sscanf(receivedChars, "/foot %d", &send_val)) {
+             printf("value: %d\n",send_val);
+        }
+    }
 }
