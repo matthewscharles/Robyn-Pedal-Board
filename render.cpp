@@ -33,6 +33,8 @@ The Bela software is distributed under the GNU Lesser General Public License
 #include <Bela.h>
 #include <DigitalChannelManager.h>
 #include <cmath>
+#include <I2c_Codec.h>
+#include <PRU.h>
 #include <stdio.h>
 #include <libpd/z_libpd.h>
 extern "C" {
@@ -71,6 +73,8 @@ float gInverseSampleRate;
 
 /*********/
 
+
+int gBufLength;
 float* gInBuf;
 float* gOutBuf;
 
@@ -427,7 +431,8 @@ bool setup(BelaContext *context, void *userData)
 
 	    tcflush(fd, TCIFLUSH);   /* Discards old data in the rx buffer            */
 
-	    serialInputReadTask = Bela_createAuxiliaryTask(&serialInputRead, 50, "bela-serial");
+	    serialInputReadTask = Bela_createAuxiliaryTask(serialInputRead, 50, "bela-serial");
+	    printf("hello\n");
 	    readIntervalSamples = context->audioSampleRate / readInterval;
 
 	    //janMod */
@@ -436,6 +441,7 @@ bool setup(BelaContext *context, void *userData)
 	int major, minor, bugfix;
 	sys_getversion(&major, &minor, &bugfix);
 	printf("Running Pd %d.%d-%d\n", major, minor, bugfix);
+	printf("hello world\n");
 	// We requested in Bela_userSettings() to have uniform sampling rate for audio
 	// and analog and non-interleaved buffers.
 	// So let's check this actually happened
@@ -722,6 +728,9 @@ void render(BelaContext *context, void *userData)
 			);
 		}
 
+        Bela_scheduleAuxiliaryTask(serialInputReadTask);
+
+
 		// analog input
 		for(int n = 0; n < context->analogInChannels; ++n)
 		{
@@ -802,21 +811,21 @@ void render(BelaContext *context, void *userData)
 		 *  output to Bela output buffer
 		 */
 
-		for (j = 0, p0 = gOutBuf; j < gLibpdBlockSize; j++, p0++) {
-			// Generate a sinewave with frequency set by gTremoloRate
-			// and amplitude from -0.5 to 0.5
-			float lfo = sinf(gPhase) * 0.5;
-			// Keep track and wrap the phase of the sinewave
-			gPhase += 2.0 * M_PI * gTremoloRate * gInverseSampleRate;
-			if(gPhase > 2.0 * M_PI)
-				gPhase -= 2.0 * M_PI;
-			for (k = 0, p1 = p0; k < context->audioOutChannels; k++, p1 += gLibpdBlockSize) {
-				// *p1 here is the sample in Pd's buffer which
-				// corresponds to the jth frame of the kth channel
-				// we edit its value in place
-				*p1 = *p1 * lfo;
-			}
-		}
+		// for (j = 0, p0 = gOutBuf; j < gLibpdBlockSize; j++, p0++) {
+		// 	// Generate a sinewave with frequency set by gTremoloRate
+		// 	// and amplitude from -0.5 to 0.5
+		// 	float lfo = sinf(gPhase) * 0.5;
+		// 	// Keep track and wrap the phase of the sinewave
+		// 	gPhase += 2.0 * M_PI * gTremoloRate * gInverseSampleRate;
+		// 	if(gPhase > 2.0 * M_PI)
+		// 		gPhase -= 2.0 * M_PI;
+		// 	for (k = 0, p1 = p0; k < context->audioOutChannels; k++, p1 += gLibpdBlockSize) {
+		// 		// *p1 here is the sample in Pd's buffer which
+		// 		// corresponds to the jth frame of the kth channel
+		// 		// we edit its value in place
+		// 		*p1 = *p1 * lfo;
+		// 	}
+		// }
 
 			/*********/
 		// audio output
@@ -853,6 +862,7 @@ void cleanup(BelaContext *context, void *userData)
 
 void serialInputRead(void*)
 {
+
     while (read(fd, &c, 1) > 0 && newData == false) {
         rc = c;
         if (rc != endMarker) {
@@ -863,6 +873,7 @@ void serialInputRead(void*)
             }
         }
         else {
+
             receivedChars[ndx] = '\0'; // terminate the string, was \0
             newData = true;
         }
@@ -870,10 +881,10 @@ void serialInputRead(void*)
 
     if (newData == true) {
 
-//        for (i=0;i<ndx;i++) {
-//            printf("%c",receivedChars[i]);
-//        }
-//        printf("\n");
+        for (i=0;i<ndx;i++) {
+            printf("%c",receivedChars[i]);
+        }
+        printf("\n");
          ndx=0;
         newData = false;
         // libpd_float("arduino", send_val);
